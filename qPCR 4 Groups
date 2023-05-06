@@ -1,0 +1,262 @@
+#Hyj in NJAU 20230506
+rm(list=ls())
+library(tidyverse)
+library(readxl)
+library(openxlsx)
+setwd("C:/Users/hyj/Desktop")
+# Loads in the Dataset
+qPCRm <- read_excel("2021-06-11 094726.xlsx", sheet = "Results", skip = 39,
+                    .name_repair = "unique", na = c("Undetermined", "NTC"))
+
+# Look into .name_repair
+qPCRm_origin <- qPCRm
+#qPCRm <- qPCRm_origin
+# Cleans up the subscripts for Ct values
+colnames(qPCRm) <- colnames(qPCRm) %>%
+  str_replace_all(pattern = "\u0442", replacement = "t") %>%
+  str_replace_all(pattern = "\u0394", replacement = "d")
+
+# Separates Biological Replicate number from Sample Name
+qPCRm <- qPCRm %>%select(`Well Position`, `Sample Name`, `Target Name`, CT) %>%
+  separate(`Sample Name`, sep = "(\\s|-)", into = c("Sample", "Number")) %>%
+  filter(!is.na(Number))
+
+#Rename
+# Create a vector of replacement values
+# since you want to ensure that the length of the vector you are creating
+# is the same as the number of rows in the dataframe
+# you should use nrow() instead of length()
+# you should change 10 or 13 to just fit your experimental data;
+replace_vec <- rep(c(rep("NC", 10), rep("DM", 12)), length.out = nrow(qPCRm)) 
+
+# Replace the values in the 'Sample' column
+qPCRm$Sample <- ifelse(qPCRm$Sample == "Sample", replace_vec, qPCRm$Sample)
+
+# Ensures each column has correct atomic vectors
+qPCRm$Number <- qPCRm$Number %>% as.numeric()
+qPCRm$CT <- qPCRm$CT %>% as.double()
+names(qPCRm)[4] <- "Target"
+qPCRm$Target <- qPCRm$Target %>% toupper()
+
+# This defines which two samples to compare in further t-test
+#Define ctrlGene 'GAPDH' to 'TARGET_8'
+#Define ctrlGene to 'NC'
+ctrlGene <- "TARGET_8"
+ctrlSample <- "NC"
+
+# Averages technical replicates
+#Say goodbye to 'Technical Replicates'
+df <- qPCRm %>% 
+  select(-`Well Position`) %>% 
+  group_by(Sample, Number, Target) %>%
+  summarise(CT = mean(CT), .groups = 'drop') %>%
+  as_tibble() %>% ungroup()
+
+#I HATE space,i love Space X
+df$Target <- str_replace_all(df$Target, " ", "_")
+
+# This groups df by Target
+# Then this mutates the grouped df by
+# taking values in the Ct column and subtracting them by
+# the Ct of Targets that are ctrlGene in that group
+#This groups get dCT and dCT confirmed
+#subtracted by the corresponding GAPDH
+df <- df %>%
+  group_by(Target) %>%
+  mutate(dCT = CT - filter(df, Target == ctrlGene)$CT)
+
+# Gets a dataframe with the average among control samples of dCT by Target genes
+#equal to 'NC Average'
+mean_dCT <- df %>% 
+  filter(Sample == ctrlSample & !(Target == ctrlGene)) %>%
+  group_by(Target) %>%
+  summarize(Average = mean(dCT))
+
+# Excludes the ctrlGene from data
+# Adds a column that subtracts dCT's from mean_dCT in matching Target genes
+# by biological replicate (Number)
+df <- df %>% ungroup() %>%
+  group_by(Number) %>%
+  filter(!(Target == ctrlGene)) %>%
+  mutate(ddCT = dCT - filter(mean_dCT, Target %in% df$Target)$Average) %>%
+  ungroup() %>%
+  mutate(FoldChange = 2 ^ -ddCT)
+
+df %>%
+  group_by(Target, Sample) %>%
+  summarise(mean_FoldChange = mean(FoldChange),.groups = 'drop')
+df %>%
+  group_by(Target, Sample) %>%
+  summarise(mean_CT = mean(CT),.groups = 'drop') 
+
+# Performs a t.test on Sample1 and Sample2
+# Returns pvalue, degrees of freedom, variances of both samples, and t.test method
+# Updated from summarize_each, that function is deprecated
+Sample1 <- "NC"
+Sample2 <- "DM"
+
+df %>%
+  group_by(Target) %>%
+  summarise_at(
+    vars(FoldChange), list(
+      pvalue = ~ t.test(.[Sample == Sample1], .[Sample == Sample2], var.equal = FALSE)$p.value,
+      dfree  = ~ t.test(.[Sample == Sample1], .[Sample == Sample2], var.equal = FALSE)$parameter,
+      vari1  = ~ sd(.[Sample == Sample1]) ^ 2,
+      vari2  = ~ sd(.[Sample == Sample2]) ^ 2,
+      test   = ~ t.test(.[Sample == Sample1], .[Sample == Sample2], var.equal = FALSE)$alternative)
+  )
+
+##############Treament#########
+##############Group############
+qPCRm_Treat <- read_excel("2021-06-15 172405.xlsx", sheet = "Results", skip = 39,
+                          .name_repair = "unique", na = c("Undetermined", "NTC"))
+
+# Look into .name_repair
+qPCRm_origin <- qPCRm_Treat
+#qPCRm <- qPCRm_origin
+# Cleans up the subscripts for Ct values
+colnames(qPCRm_Treat) <- colnames(qPCRm_Treat) %>%
+  str_replace_all(pattern = "\u0442", replacement = "t") %>%
+  str_replace_all(pattern = "\u0394", replacement = "d")
+
+# Separates Biological Replicate number from Sample Name
+qPCRm_Treat <- qPCRm_Treat %>%select(`Well Position`, `Sample Name`, `Target Name`, CT) %>%
+  separate(`Sample Name`, sep = "(\\s|-)", into = c("Sample", "Number")) %>%
+  filter(!is.na(Number))
+
+# Rename
+# Create a vector of replacement values
+# since you want to ensure that the length of the vector you are creating
+# is the same as the number of rows in the dataframe
+# you should use nrow() instead of length()
+# you should change 10 or 13 to just fit your experimental data;
+replace_vec <- rep(c(rep("DL", 12), rep("DH", 12)), length.out = nrow(qPCRm)) 
+
+# Replace the values in the 'Sample' column
+qPCRm_Treat$Sample <- ifelse(qPCRm_Treat$Sample == "Sample", replace_vec, qPCRm$Sample)
+
+# Ensures each column has correct atomic vectors
+qPCRm_Treat$Number <- qPCRm_Treat$Number %>% as.numeric()
+qPCRm_Treat$CT <- qPCRm_Treat$CT %>% as.double()
+names(qPCRm_Treat)[4] <- "Target"
+qPCRm_Treat$Target <- qPCRm_Treat$Target %>% toupper()
+
+# I HATE space,i love Space X
+qPCRm_Treat$Target <- str_replace_all(qPCRm_Treat$Target, " ", "_")
+
+# This defines which two samples to compare in t-test
+# Define ctrlGene 'GAPDH' to 'TARGET_8'
+# Define ctrlGene to 'NC'
+# Make sure the target name is the same as NC$DM Group
+#qPCRm_Treat[qPCRm_Treat$Target=='TARGET_6','Target'] <- 'TARGET_8'
+#qPCRm_Treat[qPCRm_Treat$Target=='TARGET_5','Target'] <- 'TARGET_7'
+#qPCRm_Treat[qPCRm_Treat$Target=='TARGET_4','Target'] <- 'TARGET_5'
+#qPCRm_Treat[qPCRm_Treat$Target=='TARGET_3','Target'] <- 'TARGET_4'
+#qPCRm_Treat[qPCRm_Treat$Target=='TARGET_2','Target'] <- 'TARGET_3'
+#qPCRm_Treat[qPCRm_Treat$Target=='TARGET_1','Target'] <- 'TARGET_2'
+#left name change to right
+qPCRm_Treat <- qPCRm_Treat %>%
+  mutate(
+    Target = case_when(
+      Target == 'TARGET_6' ~ 'TARGET_8',
+      Target == 'TARGET_5' ~ 'TARGET_7',
+      Target == 'TARGET_4' ~ 'TARGET_5',
+      Target == 'TARGET_3' ~ 'TARGET_4',
+      Target == 'TARGET_2' ~ 'TARGET_3',
+      Target == 'TARGET_1' ~ 'TARGET_2',
+      TRUE ~ Target
+    )
+  )
+ctrlGene <- "TARGET_8"
+ctrlSample <- "NC"
+
+# Averages technical replicates
+# Say goodbye to '副孔'
+# df_Treat_group <- qPCRm_Treat %>% select(-`Well Position`) %>% group_by(Sample, Number, Target) %>%group_modify(~ tibble(CT = mean(.x$CT))) %>%summarise(CT = mean(CT), .groups = 'keep') %>% as_tibble()
+df_Treat <- qPCRm_Treat %>% 
+  select(-`Well Position`) %>% 
+  group_by(Sample, Number, Target) %>%
+  summarise(CT = mean(CT)) %>%
+  as_tibble() %>% ungroup()
+
+# This groups df by Target
+# Then this mutates the grouped df by
+# taking values in the Ct column and subtracting them by
+# the Ct of Targets that are ctrlGene in that group
+# subtracted by the corresponding GAPDH
+df_Treat <- df_Treat %>%
+  group_by(Target) %>%
+  mutate(dCT_Treat = CT - filter(df_Treat, Target == ctrlGene)$CT)
+
+# Gets a dataframe with the average among control samples of dCT by Target genes
+# equal to 'NC_Average'
+mean_dCT_Treat <- df_Treat %>% 
+  filter(!(Target == ctrlGene)) %>%
+  group_by(Target) %>%
+  summarize(Average = mean(dCT_Treat))
+
+# Excludes the ctrlGene from data
+# Adds a column that subtracts dCT's from mean_dCT in matching Target genes
+# by biological replicate (Number)
+# Target %in% df_Treat$Target is a logical expression that checks if each value 
+# in the column Target of mean_dCT_Treat is found in the column Target of df_Treat.
+# Please do not run this code more than once can caused error 
+# You should check colnames(df_Treat) and 'NULL' the wrong colnames
+# left_join used for find corresponding targets gene.
+df_Treat <- df_Treat %>%
+  ungroup() %>%
+  group_by(Number) %>%
+  filter(!(Target == ctrlGene)) %>%
+  left_join(mean_dCT %>% 
+              filter(Target %in% df_Treat$Target) %>%
+              select(Target, Average), by = "Target") %>%
+  mutate(ddCT_Treat = dCT_Treat - Average) %>%
+  ungroup() %>%
+  mutate(FoldChange = 2 ^ -ddCT_Treat)
+
+df_Treat %>%
+  group_by(Target, Sample) %>%
+  summarise(mean_FoldChange = mean(FoldChange),.groups = 'drop')
+df_Treat %>%
+  group_by(Target, Sample) %>%
+  summarise(mean_CT = mean(CT),.groups = 'drop') 
+
+Sample3 <- "DL"
+Sample4 <- "DH"
+
+df_Treat %>%
+  group_by(Target) %>%
+  summarise_at(
+    vars(FoldChange), list(
+      pvalue = ~ t.test(.[Sample == Sample3], .[Sample == Sample4], var.equal = TRUE)$p.value,
+      dfree  = ~ t.test(.[Sample == Sample3], .[Sample == Sample4], var.equal = TRUE)$parameter,
+      vari1  = ~ sd(.[Sample == Sample3]) ^ 2,
+      vari2  = ~ sd(.[Sample == Sample4]) ^ 2,
+      test   = ~ t.test(.[Sample == Sample3], .[Sample == Sample4], var.equal = TRUE)$alternative)
+  )
+
+#############Show common columns######
+df <- df %>% arrange(Target)
+df_Treat <- df_Treat %>% arrange(Target)
+
+df_t <- t(df) %>% as.data.frame() %>% set_names(.[3,])
+df_Treat_t <- t(df_Treat) %>% as.data.frame() %>% set_names(.[3,])
+
+common_cols <- intersect(names(df_t), names(df_Treat_t))
+print(common_cols)
+
+####Write Results####
+# create Excel workbook
+wb <- createWorkbook()
+
+# add first sheet with first result
+addWorksheet(wb, "NC_DM")
+writeData(wb, "NC_DM", df)
+
+# add second sheet with second result
+addWorksheet(wb, "DL_DH")
+writeData(wb, "DL_DH", df_Treat)
+
+# save Excel workbook
+saveWorkbook(wb, "2021-06-11&15_R_Results.xlsx", overwrite = TRUE)
+
